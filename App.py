@@ -139,3 +139,4 @@ if st.button("Lancer l'extraction"):
             st.download_button("Exporter CSV", csv, "extraction.csv")
         else:
             st.error("Aucune donnée trouvée. Vérifiez la section demandée.")
+        
