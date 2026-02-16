@@ -23,36 +23,58 @@ def clean_text_segment(text):
 
 def extract_owners_from_text(text):
     """
-    Extrait tous les propriétaires/indivisaires d'un bloc de texte.
-    Cherche chaque occurrence de Nom/Prénom/Adresse.
+    Extrait tous les propriétaires/indivisaires - VERSION CORRIGÉE
     """
     owners = []
-    # On cherche les blocs commençant par "Nom:" jusqu'au prochain "Nom:" ou la fin de la section
-    # On utilise un lookahead pour ne pas consommer le "Nom:" suivant
-    owner_pattern = re.compile(r"Nom:(.*?)(?=Nom:|$)", re.DOTALL | re.IGNORECASE)
-    matches = owner_pattern.findall(text)
     
-    for block in matches:
-        # Dans chaque bloc, on extrait les détails
-        # Nom : s'arrête au Prénom ou à l'Adresse
-        nom_match = re.search(r"^\s*([A-Z\s\-]+?)(?=Prénom|Adresse|Né\(e\)|$)", block, re.IGNORECASE | re.DOTALL)
-        prenom_match = re.search(r"Prénom:\s*([A-Z\s\-]+?)(?=Adresse|Né\(e\)|$)", block, re.IGNORECASE | re.DOTALL)
-        addr_match = re.search(r"Adresse:\s*(.*?)(?=Droit réel|Numéro|$)", block, re.DOTALL | re.IGNORECASE)
+    # Pattern principal : capture Numéro propriétaire + Nom + Prénom + Adresse
+    owner_pattern = re.compile(
+        r"Numéro propriétaire\s*:\s*(\w+).*?" +
+        r"Nom\s*:\s*([A-ZÀ-Ü\s\-]+?)\s+" +
+        r"Prénom\s*:\s*([A-ZÀ-Ü\s\-]+?)" +
+        r"(?:\s+Adresse\s*:\s*(.*?))?(?=Numéro propriétaire|Propriété|$)",
+        re.DOTALL | re.IGNORECASE
+    )
+    
+    for match in owner_pattern.finditer(text):
+        numero = match.group(1).strip()
+        nom = clean_text_segment(match.group(2))
+        prenom = clean_text_segment(match.group(3))
+        adresse_raw = match.group(4) if match.group(4) else ""
+        adresse = clean_text_segment(adresse_raw) if adresse_raw else "Non détectée"
+        full_name = f"{nom} {prenom}".strip()
         
-        if nom_match:
-            last_name = clean_text_segment(nom_match.group(1))
-            first_name = clean_text_segment(prenom_match.group(1)) if prenom_match else ""
-            full_name = f"{last_name} {first_name}".strip()
-            
-            address = "Non détectée"
-            if addr_match:
-                address = clean_text_segment(addr_match.group(1))
+        if full_name:
+            owners.append({
+                "name": full_name,
+                "address": adresse,
+                "numero": numero
+            })
+    
+    # Pattern de secours si le premier échoue (sans numéro propriétaire)
+    if not owners:
+        alt_pattern = re.compile(
+            r"Nom\s*:\s*([A-ZÀ-Ü\s\-]+?)\s+" +
+            r"Prénom\s*:\s*([A-ZÀ-Ü\s\-]+?)" +
+            r"(?:.*?Adresse\s*:\s*(.*?))?(?=Nom\s*:|Propriété|$)",
+            re.DOTALL | re.IGNORECASE
+        )
+        
+        for match in alt_pattern.finditer(text):
+            nom = clean_text_segment(match.group(1))
+            prenom = clean_text_segment(match.group(2))
+            adresse_raw = match.group(3) if match.group(3) else ""
+            adresse = clean_text_segment(adresse_raw) if adresse_raw else "Non détectée"
+            full_name = f"{nom} {prenom}".strip()
             
             if full_name:
-                owners.append({"name": full_name, "address": address})
+                owners.append({
+                    "name": full_name,
+                    "address": adresse,
+                    "numero": "N/A"
+                })
     
     return owners
-
 def extract_data_from_pdf(pdf_file, target_section):
     """
     Extrait les données des propriétaires et des lots depuis le PDF.
@@ -147,3 +169,4 @@ if st.button("Lancer l'analyse"):
             st.download_button("Télécharger au format CSV", csv_output, "extraction_propriete.csv")
         else:
             st.error(f"Aucune donnée trouvée pour la section {section_target}. Vérifiez le document.")
+
