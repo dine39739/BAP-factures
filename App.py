@@ -21,10 +21,41 @@ def clean_text_segment(text):
     text = text.replace('\n', ' ')
     return re.sub(r'\s+', ' ', text).strip()
 
+def extract_owners_from_text(text):
+    """
+    Extrait tous les propriétaires/indivisaires d'un bloc de texte.
+    Cherche chaque occurrence de Nom/Prénom/Adresse.
+    """
+    owners = []
+    # On cherche les blocs commençant par "Nom:" jusqu'au prochain "Nom:" ou la fin de la section
+    # On utilise un lookahead pour ne pas consommer le "Nom:" suivant
+    owner_pattern = re.compile(r"Nom:(.*?)(?=Nom:|$)", re.DOTALL | re.IGNORECASE)
+    matches = owner_pattern.findall(text)
+    
+    for block in matches:
+        # Dans chaque bloc, on extrait les détails
+        # Nom : s'arrête au Prénom ou à l'Adresse
+        nom_match = re.search(r"^\s*([A-Z\s\-]+?)(?=Prénom|Adresse|Né\(e\)|$)", block, re.IGNORECASE | re.DOTALL)
+        prenom_match = re.search(r"Prénom:\s*([A-Z\s\-]+?)(?=Adresse|Né\(e\)|$)", block, re.IGNORECASE | re.DOTALL)
+        addr_match = re.search(r"Adresse:\s*(.*?)(?=Droit réel|Numéro|$)", block, re.DOTALL | re.IGNORECASE)
+        
+        if nom_match:
+            last_name = clean_text_segment(nom_match.group(1))
+            first_name = clean_text_segment(prenom_match.group(1)) if prenom_match else ""
+            full_name = f"{last_name} {first_name}".strip()
+            
+            address = "Non détectée"
+            if addr_match:
+                address = clean_text_segment(addr_match.group(1))
+            
+            if full_name:
+                owners.append({"name": full_name, "address": address})
+    
+    return owners
+
 def extract_data_from_pdf(pdf_file, target_section):
     """
-    Extrait les données des propriétaires, adresses et lots.
-    Gère les indivisions et les adresses multi-lignes de manière robuste.
+    Extrait les données des propriétaires et des lots depuis le PDF.
     """
     extracted_results = []
     
@@ -32,56 +63,32 @@ def extract_data_from_pdf(pdf_file, target_section):
         full_text_pages = [page.extract_text() or "" for page in pdf.pages]
         raw_text = "\n".join(full_text_pages)
         
-        # 1. Extraction des Titulaires
-        owners_data = []
-        
-        # On isole la section "Titulaire(s) de droit(s)" pour ne pas polluer avec le reste
+        # 1. Extraction des Titulaires (Zone délimitée)
         titulaire_section_match = re.search(r"Titulaire\(s\) de droit\(s\)(.*?)Propriété\(s\) bâtie\(s\)", raw_text, re.DOTALL | re.IGNORECASE)
         
+        owners_list = []
         if titulaire_section_match:
-            titulaire_text = titulaire_section_match.group(1)
-            # On découpe par propriétaire
-            owner_blocks = re.split(r"Numéro propriétaire:", titulaire_text)
-            
-            for block in owner_blocks[1:]:
-                # Extraction Nom : cherche jusqu'à "Prénom" ou "Né(e)" ou fin de ligne
-                nom_match = re.search(r"Nom:\s*([A-Z\s\-]+?)(?=Prénom|Né\(e\)|Adresse|$)", block, re.IGNORECASE | re.DOTALL)
-                prenom_match = re.search(r"Prénom:\s*([A-Z\s\-]+?)(?=Adresse|Né\(e\)|Droit|$)", block, re.IGNORECASE | re.DOTALL)
-                
-                # Extraction Adresse : capture tout entre "Adresse:" et le prochain mot clé ou fin de bloc
-                addr_match = re.search(r"Adresse:\s*(.*?)(?=Droit réel|Numéro|$)", block, re.DOTALL | re.IGNORECASE)
-                
-                if nom_match:
-                    name_part = clean_text_segment(nom_match.group(1))
-                    first_name_part = clean_text_segment(prenom_match.group(1)) if prenom_match else ""
-                    full_name = f"{name_part} {first_name_part}".strip()
-                    
-                    address = "Non détectée"
-                    if addr_match:
-                        address = clean_text_segment(addr_match.group(1))
-                    
-                    owners_data.append({"name": full_name, "address": address})
+            owners_list = extract_owners_from_text(titulaire_section_match.group(1))
+        else:
+            # Fallback si la section n'est pas bien délimitée
+            owners_list = extract_owners_from_text(raw_text[:2000])
 
-        titulaire_total = " / ".join([o["name"] for o in owners_data]) if owners_data else "Inconnu"
-        # On prend l'adresse unique (souvent la même pour l'indivision)
-        unique_addresses = list(set([o["address"] for o in owners_data if o["address"] != "Non détectée"]))
+        titulaire_total = " / ".join([o["name"] for o in owners_list]) if owners_list else "Inconnu"
+        unique_addresses = list(set([o["address"] for o in owners_list if o["address"] != "Non détectée"]))
         adresse_totale = " | ".join(unique_addresses) if unique_addresses else "Non détectée"
 
-        # 2. Analyse des Lots
-        # On cherche la section spécifiée (ex: AS)
-        # On cherche les lignes contenant la section et un numéro de plan
+        # 2. Analyse des Lots (Recherche de la section ex: AS)
         lines = raw_text.split('\n')
         for i, line in enumerate(lines):
             if re.search(rf'"{target_section}"|\b{target_section}\b', line):
-                # On prend un contexte large pour capturer le tableau
-                context = " ".join(lines[i:i+12])
+                # Analyse du contexte pour trouver LOT et Quote-part
+                context = " ".join(lines[i:i+15])
                 context = clean_text_segment(context)
                 
-                # Recherche des patterns LOT + Quote-part
-                # Format: LOT 0000237 53/10000
-                lots = re.findall(r"LOT\s*(\d+)\s*(\d+/\d+)", context)
+                # Capture des lots (ex: LOT 0000003 72/10000)
+                lots_found = re.findall(r"LOT\s*(\d+)\s*(\d+/\d+)", context)
                 
-                for lot_num, qp in lots:
+                for lot_num, qp in lots_found:
                     if not any(r['lot'] == lot_num for r in extracted_results):
                         extracted_results.append({
                             "proprietaire": titulaire_total,
@@ -94,49 +101,49 @@ def extract_data_from_pdf(pdf_file, target_section):
     return extracted_results
 
 def call_gemini_analysis(data):
-    """Synthèse via Gemini."""
+    """Synthèse des données via l'IA."""
     api_key = "" 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={api_key}"
     
     payload = {
-        "contents": [{"parts": [{"text": f"Résume ces données de propriété : {json.dumps(data)}"}]}]
+        "contents": [{"parts": [{"text": f"Analyse et résume ces données de relevés de propriété immobilière : {json.dumps(data)}"}]}]
     }
     try:
         res = requests.post(url, json=payload, timeout=15)
         return res.json()['candidates'][0]['content']['parts'][0]['text']
     except:
-        return "Analyse indisponible."
+        return "L'IA n'a pas pu générer de synthèse."
 
-# --- Interface ---
+# --- Interface Streamlit ---
 
-st.title("Extracteur de Relevés de Propriété (Version Corrective) 📄")
+st.title("Extracteur de Relevés de Propriété (Multi-Titulaires) 📄")
+st.markdown("Cette version est optimisée pour détecter tous les indivisaires et leurs adresses.")
 
 with st.sidebar:
-    st.header("Paramètres")
-    section_target = st.text_input("Section (ex: AS)", value="AS").upper()
+    st.header("Filtrage")
+    section_target = st.text_input("Section cadastrale (ex: AS)", value="AS").upper()
 
-uploaded_files = st.file_uploader("Charger les relevés PDF", type="pdf", accept_multiple_files=True)
+uploaded_files = st.file_uploader("Chargez les fichiers PDF", type="pdf", accept_multiple_files=True)
 
-if st.button("Lancer l'extraction"):
+if st.button("Lancer l'analyse"):
     if not uploaded_files:
-        st.warning("Veuillez charger des fichiers.")
+        st.warning("Veuillez charger au moins un fichier PDF.")
     else:
-        all_results = []
+        final_data = []
         for file in uploaded_files:
             data = extract_data_from_pdf(file, section_target)
-            all_results.extend(data)
+            final_data.extend(data)
             
-        if all_results:
-            st.success(f"{len(all_results)} lots extraits.")
-            st.table(all_results)
+        if final_data:
+            st.success(f"Extraction réussie : {len(final_data)} lots identifiés.")
+            st.table(final_data)
             
-            with st.expander("🤖 Synthèse"):
-                st.write(call_gemini_analysis(all_results))
+            with st.expander("🤖 Synthèse de l'IA"):
+                st.write(call_gemini_analysis(final_data))
                 
-            csv = "Propriétaire;Adresse;Lot;Section;Quote-part\n"
-            for r in all_results:
-                csv += f"{r['proprietaire']};{r['adresse']};{r['lot']};{r['section']};{r['quotePart']}\n"
-            st.download_button("Exporter CSV", csv, "extraction.csv")
+            csv_output = "Propriétaire;Adresse;Lot;Section;Quote-part\n"
+            for r in final_data:
+                csv_output += f"{r['proprietaire']};{r['adresse']};{r['lot']};{r['section']};{r['quotePart']}\n"
+            st.download_button("Télécharger au format CSV", csv_output, "extraction_propriete.csv")
         else:
-            st.error("Aucune donnée trouvée. Vérifiez la section demandée.")
-        
+            st.error(f"Aucune donnée trouvée pour la section {section_target}. Vérifiez le document.")
