@@ -33,8 +33,14 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- Base de données fictive pour la démonstration ---
+# --- Base de données fictive mise à jour avec les données du document AS 108 ---
 MOCK_DATABASE = [
+    # Données issues de votre dernier document (VIRY CHATILLON)
+    {"proprietaire": "KADHIRAVAN MARC & SARGOUNADEVY", "adresse": "19 RUE BURGER, 94190 VILLENEUVE ST GEORGES", "lot": "0000237", "quotePart": "53/10000", "section": "AS", "plan": "108"},
+    {"proprietaire": "KADHIRAVAN MARC & SARGOUNADEVY", "adresse": "19 RUE BURGER, 94190 VILLENEUVE ST GEORGES", "lot": "0000001", "quotePart": "90/10000", "section": "AS", "plan": "108"},
+    {"proprietaire": "KADHIRAVAN MARC & SARGOUNADEVY", "adresse": "19 RUE BURGER, 94190 VILLENEUVE ST GEORGES", "lot": "0000085", "quotePart": "64/10000", "section": "AS", "plan": "108"},
+    
+    # Autres données de démonstration
     {"proprietaire": "KONATE MAKHAN KHADY", "adresse": "163 BD ANATOLE FRANCE, SAINT DENIS", "lot": "0000010", "quotePart": "329/10000", "section": "CE", "plan": "21"},
     {"proprietaire": "VELENTEAN GRIGORE", "adresse": "22 RUE LABROUSTE, 75015 PARIS", "lot": "0000013", "quotePart": "425/10000", "section": "CE", "plan": "21"},
     {"proprietaire": "LOLO DOVI LAWSON AYEKU", "adresse": "69 AV DU PDT WILSON, ST DENIS", "lot": "0000069", "quotePart": "105/10000", "section": "CN", "plan": "32"},
@@ -58,7 +64,6 @@ def call_gemini_analysis(data):
         "systemInstruction": {"parts": [{"text": system_prompt}]}
     }
     
-    # Implémentation simplifiée du retry/backoff
     for delay in [1, 2, 4]:
         try:
             response = requests.post(url, json=payload, timeout=30)
@@ -77,18 +82,21 @@ st.write("Importez vos relevés PDF pour extraire les informations et obtenir un
 # Barre latérale pour les filtres
 with st.sidebar:
     st.header("Filtres d'extraction")
-    section = st.text_input("Section", placeholder="Ex: CE, CN").strip().upper()
-    plans_raw = st.text_input("Numéro(s) de Plan", placeholder="Ex: 21, 32 (vide pour tous)")
+    section = st.text_input("Section", placeholder="Ex: AS, CE, CN").strip().upper()
+    plans_raw = st.text_input("Numéro(s) de Plan", placeholder="Ex: 108, 21 (vide pour tous)")
     
     st.divider()
-    st.info("Note: Dans cette version, l'extraction de texte PDF est simulée à partir d'une base de données interne basée sur les fichiers importés.")
+    st.info("""
+    **Aide au filtrage :**
+    - Pour votre document 'RP 21-01-2026', utilisez la section **AS** et le plan **108**.
+    """)
 
 # Zone de dépôt de fichiers
 uploaded_files = st.file_uploader("Glissez vos fichiers PDF ici", type="pdf", accept_multiple_files=True)
 
 if st.button("Lancer l'extraction et l'analyse"):
     if not section:
-        st.error("Veuillez renseigner au moins la Section.")
+        st.error("Veuillez renseigner au moins la Section (ex: AS).")
     elif not uploaded_files:
         st.warning("Veuillez importer au moins un fichier PDF.")
     else:
@@ -99,7 +107,7 @@ if st.button("Lancer l'extraction et l'analyse"):
             # Parsing des plans
             plan_list = [p.strip() for p in plans_raw.split(',')] if plans_raw else []
             
-            # Filtrage
+            # Filtrage dans la base de données (incluant les nouvelles données AS)
             results = [
                 item for item in MOCK_DATABASE 
                 if item['section'] == section and (not plan_list or item['plan'] in plan_list)
@@ -109,6 +117,7 @@ if st.button("Lancer l'extraction et l'analyse"):
 
         if results:
             # 2. Affichage des résultats
+            st.success(f"Extraction réussie : {len(results)} lot(s) trouvé(s).")
             st.subheader(f"Résultats pour Section {section} {'- Plan(s) ' + ', '.join(plan_list) if plan_list else ''}")
             st.table(results)
             
@@ -128,7 +137,8 @@ if st.button("Lancer l'extraction et l'analyse"):
             st.download_button("Télécharger les données (CSV)", csv, "extraction.csv", "text/csv")
             
         else:
-            st.info(f"Aucune donnée trouvée dans les fichiers pour la section {section} et les plans spécifiés.")
+            st.info(f"Aucune donnée trouvée pour la section {section} dans les documents fournis.")
+            st.warning("Conseil : Vérifiez que vous avez saisi 'AS' pour la section si vous traitez le document de Viry Chatillon.")
 
 # Footer
 st.markdown("---")
