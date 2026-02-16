@@ -2,30 +2,71 @@ import streamlit as st
 import json
 import time
 import requests
+import pdfplumber
+import re
+import io
 
 # --- Configuration de la page ---
 st.set_page_config(
-    page_title="Extracteur de Relevés de Propriété",
+    page_title="Extracteur Réel de Relevés de Propriété",
     page_icon="📄",
     layout="wide"
 )
 
-# --- Base de données de simulation (Source de vérité actuelle) ---
-# L'application pioche ici car l'extraction réelle de PDF nécessite des librairies spécifiques 
-# installées sur le serveur.
-MOCK_DATABASE = [
-    # Données AS - Viry Chatillon (Votre document KADHIRAVAN)
-    {"proprietaire": "KADHIRAVAN MARC & SARGOUNADEVY", "adresse": "19 RUE BURGER, 94190 VILLENEUVE ST GEORGES", "lot": "0000237", "quotePart": "53/10000", "section": "AS", "plan": "108"},
-    {"proprietaire": "KADHIRAVAN MARC & SARGOUNADEVY", "adresse": "19 RUE BURGER, 94190 VILLENEUVE ST GEORGES", "lot": "0000001", "quotePart": "90/10000", "section": "AS", "plan": "108"},
-    {"proprietaire": "KADHIRAVAN MARC & SARGOUNADEVY", "adresse": "19 RUE BURGER, 94190 VILLENEUVE ST GEORGES", "lot": "0000085", "quotePart": "64/10000", "section": "AS", "plan": "108"},
+# --- Fonctions d'Extraction Réelle ---
+
+def extract_data_from_pdf(pdf_file, target_section):
+    """
+    Extrait réellement les données d'un fichier PDF importé.
+    Cherche les informations correspondant à la section cible.
+    """
+    extracted_results = []
     
-    # Données CE - Saint Denis (Exemple KONATE)
-    {"proprietaire": "KONATE MAKHAN KHADY", "adresse": "163 BD ANATOLE FRANCE, SAINT DENIS", "lot": "0000010", "quotePart": "329/10000", "section": "CE", "plan": "21"},
-    {"proprietaire": "VELENTEAN GRIGORE", "adresse": "22 RUE LABROUSTE, 75015 PARIS", "lot": "0000013", "quotePart": "425/10000", "section": "CE", "plan": "21"},
-    
-    # Données CN - Saint Denis (Exemple LAWSON)
-    {"proprietaire": "LOLO DOVI LAWSON AYEKU", "adresse": "69 AV DU PDT WILSON, ST DENIS", "lot": "0000069", "quotePart": "105/10000", "section": "CN", "plan": "32"},
-]
+    with pdfplumber.open(pdf_file) as pdf:
+        full_text = ""
+        for page in pdf.pages:
+            full_text += page.extract_text() + "\n"
+        
+        # 1. Extraction des titulaires (Noms)
+        # On cherche les lignes après "Nom:"
+        noms = re.findall(r"Nom:\s*([A-Z\s]+)", full_text)
+        prenoms = re.findall(r"Prénom:\s*([A-Z\s]+)", full_text)
+        titulaire = " & ".join([f"{n} {p}" for n, p in zip(noms, prenoms)]) if noms else "Inconnu"
+        
+        # 2. Extraction des adresses des titulaires
+        adresse_match = re.search(r"Adresse:\s*(.*?)(?=\n\n|\nPropriété)", full_text, re.DOTALL)
+        adresse_titulaire = adresse_match.group(1).replace('\n', ' ').strip() if adresse_match else "Inconnue"
+
+        # 3. Analyse des tableaux de propriétés
+        # On cherche les lignes qui contiennent la section et le lot
+        # Format type : "21", "AS", "108", , "68", "AV DU GENERAL..."
+        # On utilise une regex pour capturer les lignes de lots
+        lines = full_text.split('\n')
+        current_plan = ""
+        
+        for line in lines:
+            # Detection du plan et de la section (ex: "21", "AS", "108")
+            # Cette regex cherche des séquences de codes cadastraux
+            match_table = re.search(r"\"(\d+)\"\s*,\s*\"([A-Z]{1,2})\"\s*,\s*\"(\d+)\"", line)
+            if match_table:
+                section_found = match_table.group(2)
+                plan_found = match_table.group(3)
+                
+                # Si la section correspond à celle recherchée par l'utilisateur
+                if section_found == target_section:
+                    # On cherche le lot et la quote-part dans les lignes suivantes ou la même ligne
+                    lot_match = re.search(r"LOT\s*(\d+)\s*(\d+/\d+)", line)
+                    if lot_match:
+                        extracted_results.append({
+                            "proprietaire": titulaire,
+                            "adresse": adresse_titulaire,
+                            "lot": lot_match.group(1),
+                            "quotePart": lot_match.group(2),
+                            "section": section_found,
+                            "plan": plan_found
+                        })
+
+    return extracted_results
 
 def call_gemini_analysis(data):
     """Appelle l'API Gemini pour analyser les données extraites."""
@@ -34,8 +75,8 @@ def call_gemini_analysis(data):
     
     system_prompt = (
         "Tu es un analyste de données immobilières expert. "
-        "Synthétise ces données de relevés de propriété en français. "
-        "Indique le nombre de lots, les propriétaires principaux et les points notables."
+        "Synthétise ces données de relevés de propriété extraites d'un PDF en français. "
+        "Fais un résumé des biens possédés par la personne, les localisations et les quotes-parts."
     )
     
     payload = {
@@ -49,40 +90,55 @@ def call_gemini_analysis(data):
             return response.json()['candidates'][0]['content']['parts'][0]['text']
     except:
         pass
-    return "L'analyse automatique n'a pas pu être générée."
+    return "L'analyse intelligente n'est pas disponible pour le moment."
 
-# --- Interface ---
-st.title("Extracteur de Données de Propriété 📄✨")
+# --- Interface Streamlit ---
 
-st.warning("""
-**Note Technique :** L'application est actuellement en mode 'Simulation'. 
-Elle affiche les données correspondant à la **Section** saisie ci-dessous en les cherchant dans une base de test. 
-Pour traiter n'importe quel nouveau PDF, il faudrait activer un module de lecture OCR (comme Tesseract ou PDFPlumber).
-""")
+st.title("Extracteur Intelligent de Relevés (PDF Réel) 📄")
+st.markdown("Cette version analyse **réellement** le texte des PDF que vous téléchargez.")
 
 with st.sidebar:
-    st.header("Paramètres")
-    section_search = st.text_input("Section à extraire", value="AS").strip().upper()
-    plans_search = st.text_input("Plans (optionnel)", placeholder="Ex: 108")
+    st.header("Filtrage")
+    section_target = st.text_input("Section à extraire (ex: AS, CE)", value="AS").strip().upper()
+    st.info("L'extracteur cherchera tous les lots de cette section dans vos fichiers.")
 
-uploaded_files = st.file_uploader("Importer les relevés (PDF)", type="pdf", accept_multiple_files=True)
+uploaded_files = st.file_uploader("Chargez vos relevés de propriété (PDF)", type="pdf", accept_multiple_files=True)
 
-if st.button("Lancer l'analyse"):
-    if uploaded_files:
-        with st.spinner(f"Recherche des données pour la section {section_search}..."):
-            time.sleep(1) # Simulation du temps de calcul
-            
-            # Filtrage dynamique basé sur la saisie utilisateur
-            results = [d for d in MOCK_DATABASE if d['section'] == section_search]
-            
-            if results:
-                st.success(f"Données trouvées pour la section {section_search}")
-                st.table(results)
-                
-                st.subheader("🤖 Analyse de l'IA")
-                analysis = call_gemini_analysis(results)
-                st.info(analysis)
-            else:
-                st.error(f"Aucune donnée enregistrée pour la section '{section_search}'. Essayez 'CE' ou 'CN'.")
+if st.button("Analyser les documents"):
+    if not uploaded_files:
+        st.error("Veuillez charger au moins un fichier PDF.")
     else:
-        st.error("Veuillez d'abord importer un fichier PDF.")
+        all_data = []
+        
+        with st.status("Lecture des PDF et extraction des données...", expanded=True) as status:
+            for uploaded_file in uploaded_files:
+                st.write(f"Traitement de : {uploaded_file.name}")
+                # Appel de la fonction d'extraction réelle
+                data = extract_data_from_pdf(uploaded_file, section_target)
+                all_data.extend(data)
+            
+            status.update(label="Extraction terminée !", state="complete", expanded=False)
+
+        if all_data:
+            st.success(f"Extraction réussie : {len(all_data)} lots trouvés pour la section {section_target}.")
+            
+            # Affichage des données
+            st.subheader("Données Extraites")
+            st.table(all_data)
+            
+            # Analyse IA
+            st.divider()
+            st.subheader("🤖 Synthèse de l'IA (Gemini)")
+            with st.spinner("Analyse en cours..."):
+                analysis = call_gemini_analysis(all_data)
+                st.info(analysis)
+                
+            # Export
+            csv = "Proprietaire;Lot;Section;Plan;Quote-part\n" + "\n".join([f"{d['proprietaire']};{d['lot']};{d['section']};{d['plan']};{d['quotePart']}" for d in all_data])
+            st.download_button("Exporter en CSV", csv, "export_cadastre.csv", "text/csv")
+        else:
+            st.warning(f"Aucun lot trouvé pour la section '{section_target}' dans les fichiers fournis.")
+            st.info("Vérifiez que la section saisie correspond bien à celle présente dans le document (ex: AS).")
+
+st.markdown("---")
+st.caption("Moteur d'extraction : pdfplumber + Regex | Analyse : Gemini 2.5 Flash")
