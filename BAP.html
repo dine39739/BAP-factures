@@ -1,0 +1,950 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestion Trésorerie - Factures</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        .upload-zone {
+            border: 2px dashed #dee2e6;
+            border-radius: 10px;
+            padding: 2rem;
+            text-align: center;
+            background: #f8f9fa;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .upload-zone:hover {
+            border-color: #0d6efd;
+            background: #e9ecef;
+        }
+        .file-info {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: #d1e7dd;
+            border-radius: 5px;
+            display: none;
+        }
+        .table-container {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .facture-row.selected {
+            background-color: #e6f7ff !important;
+        }
+        .summary-card {
+            background: white;
+            padding: 1rem;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .summary-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #0d6efd;
+        }
+        .mandat-info {
+            background: #e7f3ff;
+            border-left: 4px solid #0d6efd;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border-radius: 5px;
+        }
+        .libelles-mandat {
+            font-size: 0.9rem;
+            color: #666;
+            margin-top: 0.25rem;
+        }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #f3f3f3;
+            border-radius: 50%;
+            border-top-color: #0d6efd;
+            animation: spin 1s ease-in-out infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .badge-mandat {
+            font-size: 0.75rem;
+            background-color: #6c757d;
+        }
+        .caracteres-suivants {
+            font-size: 0.8em;
+            color: #6c757d;
+            font-weight: normal;
+        }
+        
+        /* Styles pour l'impression */
+        @media print {
+            .no-print {
+                display: none !important;
+            }
+            .print-header {
+                display: block !important;
+                text-align: center;
+                margin-bottom: 20px;
+                border-bottom: 2px solid #000;
+                padding-bottom: 10px;
+            }
+            .print-summary {
+                display: block !important;
+                margin-bottom: 20px;
+                background: #f8f9fa;
+                padding: 15px;
+                border-radius: 5px;
+            }
+            .table-print {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 12px;
+            }
+            .table-print th,
+            .table-print td {
+                border: 1px solid #ddd;
+                padding: 6px;
+                text-align: left;
+            }
+            .table-print th {
+                background-color: #f8f9fa;
+                font-weight: bold;
+            }
+            .table-print .selected-row {
+                background-color: #e6f7ff !important;
+            }
+            .page-break {
+                page-break-after: always;
+            }
+        }
+        
+        .print-header {
+            display: none;
+        }
+        .print-summary {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container py-4">
+        <!-- Header -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <h1 class="text-center">GESTEAM - Applicatif pour aide au suivi de validation des factures</h1>
+                <p class="text-center text-muted">Importez votre fichier Excel et gérez vos factures par mandat</p>
+            </div>
+        </div>
+
+        <!-- Upload Section -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">Importation du fichier Excel</h5>
+                        <div class="upload-zone" id="uploadZone">
+                            <input type="file" id="excelFile" accept=".xlsx,.xls" style="display: none;">
+                            <div class="mb-3">
+                                <i class="fas fa-file-excel fa-3x text-success"></i>
+                            </div>
+                            <h5>Glisser-déposer ou cliquer pour importer</h5>
+                            <p class="text-muted mb-0">
+                                Formats supportés : .xlsx, .xls<br>
+                                Colonnes requises : Date, Mandat, Fournisseur, Libellé, Codif., Info.Reglement, Total TTC, Solde dû, A payer, Echéance, Solde trésorerie
+                            </p>
+                        </div>
+                        <div class="file-info" id="fileInfo">
+                            <div id="fileStatus"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mandat Info Section -->
+        <div class="row mb-4" id="mandatInfoSection" style="display: none;">
+            <div class="col-12">
+                <div class="mandat-info">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6>Groupe de mandat sélectionné : <strong id="currentMandat">-</strong></h6>
+                            <div class="libelles-mandat" id="libellesMandat"></div>
+                        </div>
+                        <div class="col-md-6">
+                            <h6>Solde de trésorerie : <strong id="currentSolde">0,00 €</strong></h6>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Controls Section -->
+        <div class="row mb-4" id="controlsSection" style="display: none;">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-3">
+                                <label for="mandatSelect" class="form-label">Sélectionner un groupe de mandat</label>
+                                <select id="mandatSelect" class="form-select">
+                                    <option value="">-- Choisir un groupe --</option>
+                                </select>
+                                <small class="text-muted">Groupés par les 4 premiers caractères</small>
+                            </div>
+                            <div class="col-md-3">
+                                <label for="dateFilter" class="form-label">Filtrer par date d'échéance</label>
+                                <input type="date" id="dateFilter" class="form-control">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Actions</label>
+                                <div class="d-grid gap-2 d-md-flex">
+                                    <button id="resetBtn" class="btn btn-outline-secondary me-2">Réinitialiser</button>
+                                    <button id="printBtn" class="btn btn-success no-print">
+                                        <i class="fas fa-print"></i> Imprimer les sélections
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="row mb-4" id="summarySection" style="display: none;">
+            <div class="col-md-3">
+                <div class="summary-card">
+                    <div class="summary-value" id="soldeTresorerie">0,00 €</div>
+                    <div class="text-muted">Solde de trésorerie actuel</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="summary-card">
+                    <div class="summary-value" id="totalFactures">0</div>
+                    <div class="text-muted">Factures affichées</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="summary-card">
+                    <div class="summary-value text-success" id="totalPaye">0,00 €</div>
+                    <div class="text-muted">Total payé</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="summary-card">
+                    <div class="summary-value text-danger" id="totalAPayer">0,00 €</div>
+                    <div class="text-muted">À payer</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Table Section -->
+        <div class="row" id="tableSection" style="display: none;">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="card-title mb-0">Liste des factures</h5>
+                            <div class="no-print">
+                                <span id="selectedCount" class="badge bg-primary">0 sélectionnée(s)</span>
+                            </div>
+                        </div>
+                        <div class="table-container">
+                            <table class="table table-striped table-hover">
+                                <thead>
+                                    <tr>
+                                        <th><input type="checkbox" id="selectAll"></th>
+                                        <th>Date</th>
+                                        <th>Mandat <span class="badge badge-mandat bg-secondary">4 premiers caractères</span></th>
+                                        <th>Libellé complet</th>
+                                        <th>Fournisseur</th>
+                                        <th>Codif.</th>
+                                        <th>Info.Reglement</th>
+                                        <th>Total TTC</th>
+                                        <th>Solde dû</th>
+                                        <th>A payer</th>
+                                        <th>Échéance</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="facturesTable">
+                                    <!-- Les données seront insérées ici -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Zone cachée pour l'impression -->
+    <div id="printZone" style="display: none;">
+        <div class="print-header">
+            <h1>Factures Sélectionnées - Gestionnaire de Trésorerie</h1>
+            <div class="row">
+                <div class="col-6">
+                    <p><strong>Groupe de mandat :</strong> <span id="printMandat">-</span></p>
+                    <p><strong>Libellés regroupés :</strong> <span id="printLibelles">-</span></p>
+                </div>
+                <div class="col-6">
+                    <p><strong>Date d'impression :</strong> <span id="printDate">-</span></p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="print-summary">
+            <div class="row">
+                <div class="col-3">
+                    <p><strong>Total sélectionné :</strong> <span id="printTotalSelected">0,00 €</span></p>
+                </div>
+                <div class="col-3">
+                    <p><strong>Nombre de factures :</strong> <span id="printCount">0</span></p>
+                </div>
+                <div class="col-3">
+                    <p><strong>Solde restant :</strong> <span id="printSoldeRestant">0,00 €</span></p>
+                </div>
+                <div class="col-3">
+                    <p><strong>Statut :</strong> <span id="printStatut">À payer</span></p>
+                </div>
+            </div>
+        </div>
+        
+        <table class="table-print" id="printTable">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Mandat</th>
+                    <th>Libellé complet</th>
+                    <th>Fournisseur</th>
+                    <th>Codif.</th>
+                    <th>Info.Reglement</th>
+                    <th>Total TTC</th>
+                    <th>Solde dû</th>
+                    <th>A payer</th>
+                    <th>Échéance</th>
+                </tr>
+            </thead>
+            <tbody id="printTableBody">
+                <!-- Les données d'impression seront insérées ici -->
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        class GestionnaireTresorerie {
+            constructor() {
+                this.donnees = [];
+                this.donneesFiltrees = [];
+                this.mandatsGroupes = new Map();
+                this.mandatActuel = null;
+                this.soldeTresorerieActuel = 0;
+                
+                this.initialiserEvenements();
+            }
+
+            initialiserEvenements() {
+                const uploadZone = document.getElementById('uploadZone');
+                const fileInput = document.getElementById('excelFile');
+
+                uploadZone.addEventListener('click', () => fileInput.click());
+                uploadZone.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    uploadZone.style.borderColor = '#0d6efd';
+                    uploadZone.style.background = '#e9ecef';
+                });
+                uploadZone.addEventListener('dragleave', () => {
+                    uploadZone.style.borderColor = '#dee2e6';
+                    uploadZone.style.background = '#f8f9fa';
+                });
+                uploadZone.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    uploadZone.style.borderColor = '#dee2e6';
+                    uploadZone.style.background = '#f8f9fa';
+                    if (e.dataTransfer.files.length > 0) {
+                        this.traiterFichier(e.dataTransfer.files[0]);
+                    }
+                });
+
+                fileInput.addEventListener('change', (e) => {
+                    if (e.target.files.length > 0) {
+                        this.traiterFichier(e.target.files[0]);
+                    }
+                });
+
+                document.getElementById('mandatSelect').addEventListener('change', (e) => {
+                    this.changerMandat(e.target.value);
+                });
+                document.getElementById('dateFilter').addEventListener('change', () => this.appliquerFiltres());
+                document.getElementById('selectAll').addEventListener('change', (e) => this.selectionnerTout(e.target.checked));
+                document.getElementById('resetBtn').addEventListener('click', () => this.reinitialiser());
+                document.getElementById('printBtn').addEventListener('click', () => this.imprimerSelections());
+            }
+
+            async traiterFichier(file) {
+                if (!file.name.match(/\.(xlsx|xls)$/i)) {
+                    this.afficherErreur('Veuillez sélectionner un fichier Excel (.xlsx ou .xls)');
+                    return;
+                }
+
+                this.afficherChargement(`Traitement de ${file.name}...`);
+
+                try {
+                    const arrayBuffer = await file.arrayBuffer();
+                    const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+                    
+                    const firstSheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[firstSheetName];
+                    
+                    const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+                    
+                    this.donnees = this.nettoyerDonnees(jsonData);
+                    
+                    if (this.donnees.length === 0) {
+                        throw new Error('Aucune donnée valide trouvée dans le fichier');
+                    }
+
+                    this.grouperMandats();
+                    
+                    this.preparerAffichage();
+                    this.afficherSucces(`${this.donnees.length} factures importées avec succès (${this.mandatsGroupes.size} groupes de mandats)`);
+                    
+                } catch (error) {
+                    console.error('Erreur:', error);
+                    this.afficherErreur(`Erreur lors de l'importation : ${error.message}`);
+                }
+            }
+
+            nettoyerDonnees(donneesBrutes) {
+                if (donneesBrutes.length < 2) {
+                    throw new Error('Le fichier ne contient pas assez de données');
+                }
+
+                const entetes = donneesBrutes[0].map(h => 
+                    typeof h === 'string' ? h.trim() : ''
+                );
+
+                console.log('En-têtes détectées:', entetes);
+
+                const indicesColonnes = {
+                    date: entetes.findIndex(h => h === 'Date'),
+                    mandat: entetes.findIndex(h => h === 'Mandat'),
+                    fournisseur: entetes.findIndex(h => h === 'Fournisseur'),
+                    libelle: entetes.findIndex(h => h === 'Libellé'),
+                    codof: entetes.findIndex(h => h === 'Codif.'),
+                    infoReglement: entetes.findIndex(h => h === 'Info.Reglement'),
+                    totalTTC: entetes.findIndex(h => h === 'Total TTC'),
+                    soldeDu: entetes.findIndex(h => h === 'Solde dû'),
+                    aPayer: entetes.findIndex(h => h === 'A payer'),
+                    echeance: entetes.findIndex(h => h === 'Echéance'),
+                    soldeTresorerie: entetes.findIndex(h => h === 'Solde trésorerie')
+                };
+
+                console.log('Indices des colonnes:', indicesColonnes);
+
+                const colonnesRequises = ['date', 'mandat', 'libelle', 'totalTTC', 'soldeTresorerie'];
+                const colonnesManquantes = colonnesRequises.filter(col => indicesColonnes[col] === -1);
+                
+                if (colonnesManquantes.length > 0) {
+                    throw new Error(`Colonnes manquantes : ${colonnesManquantes.join(', ')}. Colonnes trouvées : ${entetes.join(', ')}`);
+                }
+
+                const donneesNettoyees = [];
+
+                for (let i = 1; i < donneesBrutes.length; i++) {
+                    const ligne = donneesBrutes[i];
+                    if (!ligne || ligne.length === 0) continue;
+
+                    const facture = {
+                        id: i,
+                        date: this.parserDate(ligne[indicesColonnes.date]),
+                        mandat: (ligne[indicesColonnes.mandat] || '').toString().trim(),
+                        fournisseur: (ligne[indicesColonnes.fournisseur] || '').toString().trim(),
+                        libelle: (ligne[indicesColonnes.libelle] || '').toString().trim(),
+                        codof: (ligne[indicesColonnes.codof] || '').toString().trim(),
+                        infoReglement: (ligne[indicesColonnes.infoReglement] || '').toString().trim(),
+                        totalTTC: this.parserMontant(ligne[indicesColonnes.totalTTC]),
+                        soldeDu: this.parserMontant(ligne[indicesColonnes.soldeDu]),
+                        aPayer: (ligne[indicesColonnes.aPayer] || '').toString().trim(),
+                        echeance: this.parserDate(ligne[indicesColonnes.echeance]),
+                        soldeTresorerie: this.parserMontant(ligne[indicesColonnes.soldeTresorerie]),
+                        estPayee: false
+                    };
+
+                    if (facture.mandat && facture.libelle && facture.totalTTC !== null && facture.soldeTresorerie !== null) {
+                        donneesNettoyees.push(facture);
+                    }
+                }
+
+                return donneesNettoyees;
+            }
+
+            grouperMandats() {
+                this.mandatsGroupes.clear();
+                
+                this.donnees.forEach(facture => {
+                    const mandatCle = this.extraireCleMandat(facture.mandat);
+                    const caracteresSuivants = this.extraireCaracteresSuivants(facture.mandat);
+                    const soldeTresorerie = facture.soldeTresorerie || 0;
+                    
+                    if (!this.mandatsGroupes.has(mandatCle)) {
+                        this.mandatsGroupes.set(mandatCle, {
+                            cle: mandatCle,
+                            libellesComplets: new Set(),
+                            caracteresSuivants: new Set(),
+                            soldeTresorerie: soldeTresorerie,
+                            totalFactures: 0
+                        });
+                    }
+                    
+                    const mandatGroupe = this.mandatsGroupes.get(mandatCle);
+                    mandatGroupe.libellesComplets.add(facture.mandat);
+                    if (caracteresSuivants) {
+                        mandatGroupe.caracteresSuivants.add(caracteresSuivants);
+                    }
+                    mandatGroupe.totalFactures++;
+                    
+                    if (soldeTresorerie > mandatGroupe.soldeTresorerie) {
+                        mandatGroupe.soldeTresorerie = soldeTresorerie;
+                    }
+                });
+            }
+
+            extraireCleMandat(mandatComplet) {
+                return mandatComplet.substring(0, 4).replace(/\s/g, '').toUpperCase();
+            }
+
+            extraireCaracteresSuivants(mandatComplet) {
+                // Prendre les caractères après les 4 premiers (en ignorant les espaces)
+                const sansEspaces = mandatComplet.replace(/\s/g, '');
+                if (sansEspaces.length > 4) {
+                    return sansEspaces.substring(4);
+                }
+                return '';
+            }
+
+            preparerAffichage() {
+                this.donneesFiltrees = [...this.donnees];
+                
+                document.getElementById('controlsSection').style.display = 'block';
+                document.getElementById('summarySection').style.display = 'block';
+                document.getElementById('tableSection').style.display = 'block';
+                
+                this.remplirMandats();
+                
+                if (this.mandatsGroupes.size > 0) {
+                    const premierMandat = Array.from(this.mandatsGroupes.keys())[0];
+                    this.changerMandat(premierMandat);
+                }
+            }
+
+            remplirMandats() {
+                const select = document.getElementById('mandatSelect');
+                select.innerHTML = '<option value="">-- Choisir un groupe --</option>';
+                
+                Array.from(this.mandatsGroupes.keys()).sort().forEach(cleMandat => {
+                    const mandatGroupe = this.mandatsGroupes.get(cleMandat);
+                    const option = document.createElement('option');
+                    option.value = cleMandat;
+                    
+                    // Afficher la clé, les caractères suivants et le nombre de libellés
+                    const nbLibelles = mandatGroupe.libellesComplets.size;
+                    const libellesInfo = nbLibelles > 1 ? ` (${nbLibelles} libellés)` : '';
+                    
+                    // Formater les caractères suivants
+                    let caracteresSuivantsText = '';
+                    if (mandatGroupe.caracteresSuivants.size > 0) {
+                        const caracteresArray = Array.from(mandatGroupe.caracteresSuivants).sort();
+                        caracteresSuivantsText = ` <span class="caracteres-suivants">[${caracteresArray.join(', ')}]</span>`;
+                    }
+                    
+                    option.innerHTML = `${cleMandat}${caracteresSuivantsText} - ${this.formaterMontant(mandatGroupe.soldeTresorerie)}${libellesInfo}`;
+                    
+                    option.title = `Libellés complets: ${Array.from(mandatGroupe.libellesComplets).join(', ')}`;
+                    select.appendChild(option);
+                });
+            }
+
+            changerMandat(cleMandat) {
+                if (!cleMandat) {
+                    this.mandatActuel = null;
+                    this.soldeTresorerieActuel = 0;
+                    this.donneesFiltrees = [];
+                    this.masquerSections();
+                    return;
+                }
+
+                this.mandatActuel = cleMandat;
+                const mandatGroupe = this.mandatsGroupes.get(cleMandat);
+                this.soldeTresorerieActuel = mandatGroupe.soldeTresorerie || 0;
+                
+                document.getElementById('mandatInfoSection').style.display = 'block';
+                document.getElementById('currentMandat').textContent = cleMandat;
+                document.getElementById('currentSolde').textContent = this.formaterMontant(this.soldeTresorerieActuel);
+                
+                // Afficher les libellés complets regroupés
+                const libellesElement = document.getElementById('libellesMandat');
+                const libelles = Array.from(mandatGroupe.libellesComplets);
+                if (libelles.length > 1) {
+                    libellesElement.innerHTML = `<strong>Libellés regroupés :</strong> ${libelles.join(', ')}`;
+                } else {
+                    libellesElement.innerHTML = `<strong>Libellé :</strong> ${libelles[0]}`;
+                }
+                
+                this.appliquerFiltres();
+            }
+
+            appliquerFiltres() {
+                if (!this.mandatActuel) {
+                    this.donneesFiltrees = [];
+                    this.mettreAJourResume();
+                    this.afficherTableau();
+                    return;
+                }
+
+                const date = document.getElementById('dateFilter').value;
+                
+                this.donneesFiltrees = this.donnees.filter(facture => {
+                    const factureCle = this.extraireCleMandat(facture.mandat);
+                    if (factureCle !== this.mandatActuel) {
+                        return false;
+                    }
+                    
+                    if (date && facture.echeance) {
+                        const dateFacture = new Date(facture.echeance).toISOString().split('T')[0];
+                        if (dateFacture !== date) {
+                            return false;
+                        }
+                    }
+                    
+                    return true;
+                });
+                
+                this.mettreAJourResume();
+                this.afficherTableau();
+            }
+
+            afficherTableau() {
+                const tbody = document.getElementById('facturesTable');
+                const selectAll = document.getElementById('selectAll');
+                
+                if (this.donneesFiltrees.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="11" class="text-center text-muted py-4">
+                                ${this.mandatActuel ? 'Aucune facture trouvée pour ce groupe de mandat avec les filtres actuels' : 'Veuillez sélectionner un groupe de mandat'}
+                            </td>
+                        </tr>
+                    `;
+                    selectAll.checked = false;
+                    this.mettreAJourCompteurSelection();
+                    return;
+                }
+
+                tbody.innerHTML = this.donneesFiltrees.map(facture => `
+                    <tr class="${facture.estPayee ? 'selected' : ''}" data-id="${facture.id}">
+                        <td>
+                            <input type="checkbox" class="checkbox-facture" 
+                                   ${facture.estPayee ? 'checked' : ''}
+                                   data-montant="${facture.totalTTC || 0}">
+                        </td>
+                        <td>${this.formaterDate(facture.date)}</td>
+                        <td>
+                            <strong>${this.extraireCleMandat(facture.mandat)}</strong>
+                            <br>
+                            <small class="text-muted">${this.echapperHtml(facture.mandat)}</small>
+                        </td>
+                        <td>${this.echapperHtml(facture.libelle)}</td>
+                        <td>${this.echapperHtml(facture.fournisseur)}</td>
+                        <td>${this.echapperHtml(facture.codof)}</td>
+                        <td>${this.echapperHtml(facture.infoReglement)}</td>
+                        <td class="text-end">${this.formaterMontant(facture.totalTTC)}</td>
+                        <td class="text-end">${facture.soldeDu !== null ? this.formaterMontant(facture.soldeDu) : '-'}</td>
+                        <td>${this.echapperHtml(facture.aPayer)}</td>
+                        <td>${this.formaterDate(facture.echeance)}</td>
+                    </tr>
+                `).join('');
+
+                document.querySelectorAll('.checkbox-facture').forEach(checkbox => {
+                    checkbox.addEventListener('change', (e) => this.gererSelectionFacture(e.target));
+                });
+
+                const casesCochees = document.querySelectorAll('.checkbox-facture:checked').length;
+                selectAll.checked = casesCochees === this.donneesFiltrees.length;
+                selectAll.indeterminate = casesCochees > 0 && casesCochees < this.donneesFiltrees.length;
+                
+                this.mettreAJourCompteurSelection();
+            }
+
+            gererSelectionFacture(checkbox) {
+                const ligne = checkbox.closest('tr');
+                const id = parseInt(ligne.dataset.id);
+                const montant = parseFloat(checkbox.dataset.montant);
+                const facture = this.donneesFiltrees.find(f => f.id === id);
+                
+                if (facture) {
+                    if (checkbox.checked) {
+                        if (this.soldeTresorerieActuel - montant < 0) {
+                            alert(`Solde de trésorerie insuffisant pour cette facture !\nSolde disponible : ${this.formaterMontant(this.soldeTresorerieActuel)}`);
+                            checkbox.checked = false;
+                            return;
+                        }
+                        facture.estPayee = true;
+                        this.soldeTresorerieActuel -= montant;
+                        ligne.classList.add('selected');
+                    } else {
+                        facture.estPayee = false;
+                        this.soldeTresorerieActuel += montant;
+                        ligne.classList.remove('selected');
+                    }
+                    
+                    document.getElementById('currentSolde').textContent = this.formaterMontant(this.soldeTresorerieActuel);
+                    this.mettreAJourResume();
+                    this.mettreAJourCompteurSelection();
+                }
+            }
+
+            selectionnerTout(estCoche) {
+                document.querySelectorAll('.checkbox-facture').forEach(checkbox => {
+                    const ligne = checkbox.closest('tr');
+                    const id = parseInt(ligne.dataset.id);
+                    const montant = parseFloat(checkbox.dataset.montant);
+                    const facture = this.donneesFiltrees.find(f => f.id === id);
+                    
+                    if (facture && estCoche !== facture.estPayee) {
+                        if (estCoche) {
+                            const totalAPayer = this.donneesFiltrees
+                                .filter(f => !f.estPayee)
+                                .reduce((sum, f) => sum + (f.totalTTC || 0), 0);
+                            
+                            if (this.soldeTresorerieActuel - totalAPayer < 0) {
+                                alert(`Solde de trésorerie insuffisant pour payer toutes les factures !\nSolde disponible : ${this.formaterMontant(this.soldeTresorerieActuel)}\nTotal à payer : ${this.formaterMontant(totalAPayer)}`);
+                                document.getElementById('selectAll').checked = false;
+                                return;
+                            }
+                        }
+                        
+                        checkbox.checked = estCoche;
+                        facture.estPayee = estCoche;
+                        
+                        if (estCoche) {
+                            this.soldeTresorerieActuel -= montant;
+                            ligne.classList.add('selected');
+                        } else {
+                            this.soldeTresorerieActuel += montant;
+                            ligne.classList.remove('selected');
+                        }
+                    }
+                });
+                
+                document.getElementById('currentSolde').textContent = this.formaterMontant(this.soldeTresorerieActuel);
+                this.mettreAJourResume();
+                this.mettreAJourCompteurSelection();
+            }
+
+            mettreAJourCompteurSelection() {
+                const casesCochees = document.querySelectorAll('.checkbox-facture:checked').length;
+                document.getElementById('selectedCount').textContent = `${casesCochees} sélectionnée(s)`;
+            }
+
+            mettreAJourResume() {
+                document.getElementById('soldeTresorerie').textContent = this.formaterMontant(this.soldeTresorerieActuel);
+                document.getElementById('totalFactures').textContent = this.donneesFiltrees.length;
+                
+                const totalPaye = this.donneesFiltrees
+                    .filter(f => f.estPayee)
+                    .reduce((sum, f) => sum + (f.totalTTC || 0), 0);
+                document.getElementById('totalPaye').textContent = this.formaterMontant(totalPaye);
+                
+                const totalAPayer = this.donneesFiltrees
+                    .filter(f => !f.estPayee)
+                    .reduce((sum, f) => sum + (f.totalTTC || 0), 0);
+                document.getElementById('totalAPayer').textContent = this.formaterMontant(totalAPayer);
+            }
+
+            imprimerSelections() {
+                const facturesSelectionnees = this.donneesFiltrees.filter(f => f.estPayee);
+                
+                if (facturesSelectionnees.length === 0) {
+                    alert('Aucune facture sélectionnée à imprimer.');
+                    return;
+                }
+
+                this.preparerImpression(facturesSelectionnees);
+                
+                setTimeout(() => {
+                    window.print();
+                }, 500);
+            }
+
+            preparerImpression(facturesSelectionnees) {
+                const totalSelectionne = facturesSelectionnees.reduce((sum, f) => sum + (f.totalTTC || 0), 0);
+                const soldeRestant = this.soldeTresorerieActuel;
+                const mandatGroupe = this.mandatsGroupes.get(this.mandatActuel);
+                const libellesComplets = mandatGroupe ? Array.from(mandatGroupe.libellesComplets).join(', ') : '-';
+                
+                document.getElementById('printMandat').textContent = this.mandatActuel || '-';
+                document.getElementById('printLibelles').textContent = libellesComplets;
+                document.getElementById('printDate').textContent = new Date().toLocaleDateString('fr-FR');
+                document.getElementById('printTotalSelected').textContent = this.formaterMontant(totalSelectionne);
+                document.getElementById('printCount').textContent = facturesSelectionnees.length;
+                document.getElementById('printSoldeRestant').textContent = this.formaterMontant(soldeRestant);
+                document.getElementById('printStatut').textContent = 'Sélectionnées pour paiement';
+                
+                const tbody = document.getElementById('printTableBody');
+                tbody.innerHTML = facturesSelectionnees.map(facture => `
+                    <tr class="${facture.estPayee ? 'selected-row' : ''}">
+                        <td>${this.formaterDate(facture.date)}</td>
+                        <td>
+                            <strong>${this.extraireCleMandat(facture.mandat)}</strong>
+                            <br>
+                            <small>${this.echapperHtml(facture.mandat)}</small>
+                        </td>
+                        <td>${this.echapperHtml(facture.libelle)}</td>
+                        <td>${this.echapperHtml(facture.fournisseur)}</td>
+                        <td>${this.echapperHtml(facture.codof)}</td>
+                        <td>${this.echapperHtml(facture.infoReglement)}</td>
+                        <td class="text-end">${this.formaterMontant(facture.totalTTC)}</td>
+                        <td class="text-end">${facture.soldeDu !== null ? this.formaterMontant(facture.soldeDu) : '-'}</td>
+                        <td>${this.echapperHtml(facture.aPayer)}</td>
+                        <td>${this.formaterDate(facture.echeance)}</td>
+                    </tr>
+                `).join('');
+                
+                document.getElementById('printZone').style.display = 'block';
+            }
+
+            masquerSections() {
+                document.getElementById('mandatInfoSection').style.display = 'none';
+                document.getElementById('summarySection').style.display = 'none';
+                document.getElementById('tableSection').style.display = 'none';
+            }
+
+            parserDate(valeurDate) {
+                if (!valeurDate) return null;
+                if (valeurDate instanceof Date) return valeurDate;
+                if (typeof valeurDate === 'number') {
+                    return new Date((valeurDate - 25569) * 86400 * 1000);
+                }
+                if (typeof valeurDate === 'string') {
+                    const date = new Date(valeurDate);
+                    return isNaN(date.getTime()) ? null : date;
+                }
+                return null;
+            }
+
+            parserMontant(valeurMontant) {
+                if (valeurMontant === null || valeurMontant === undefined || valeurMontant === '') {
+                    return null;
+                }
+                if (typeof valeurMontant === 'number') {
+                    return parseFloat(valeurMontant.toFixed(2));
+                }
+                if (typeof valeurMontant === 'string') {
+                    const propre = valeurMontant
+                        .replace(/[€$,\s]/g, '')
+                        .replace(',', '.')
+                        .trim();
+                    const nombre = parseFloat(propre);
+                    return isNaN(nombre) ? null : parseFloat(nombre.toFixed(2));
+                }
+                return null;
+            }
+
+            formaterDate(date) {
+                if (!date) return '-';
+                try {
+                    return new Date(date).toLocaleDateString('fr-FR');
+                } catch {
+                    return '-';
+                }
+            }
+
+            formaterMontant(montant) {
+                if (montant === null || montant === undefined) return '0,00 €';
+                return new Intl.NumberFormat('fr-FR', {
+                    style: 'currency',
+                    currency: 'EUR',
+                    minimumFractionDigits: 2
+                }).format(montant);
+            }
+
+            echapperHtml(texte) {
+                if (texte === null || texte === undefined) return '';
+                const div = document.createElement('div');
+                div.textContent = texte;
+                return div.innerHTML;
+            }
+
+            reinitialiser() {
+                if (confirm('Êtes-vous sûr de vouloir réinitialiser toutes les données ?')) {
+                    this.donnees = [];
+                    this.donneesFiltrees = [];
+                    this.mandatsGroupes.clear();
+                    this.mandatActuel = null;
+                    this.soldeTresorerieActuel = 0;
+                    
+                    document.getElementById('controlsSection').style.display = 'none';
+                    document.getElementById('summarySection').style.display = 'none';
+                    document.getElementById('tableSection').style.display = 'none';
+                    document.getElementById('mandatInfoSection').style.display = 'none';
+                    document.getElementById('excelFile').value = '';
+                    document.getElementById('fileInfo').style.display = 'none';
+                    document.getElementById('mandatSelect').innerHTML = '<option value="">-- Choisir un groupe --</option>';
+                    document.getElementById('dateFilter').value = '';
+                }
+            }
+
+            afficherChargement(message) {
+                const fileInfo = document.getElementById('fileInfo');
+                fileInfo.style.display = 'block';
+                fileInfo.style.background = '#fff3cd';
+                fileInfo.style.borderColor = '#ffc107';
+                fileInfo.innerHTML = `
+                    <div class="d-flex align-items-center">
+                        <div class="loading me-2"></div>
+                        <span>${message}</span>
+                    </div>
+                `;
+            }
+
+            afficherSucces(message) {
+                const fileInfo = document.getElementById('fileInfo');
+                fileInfo.style.display = 'block';
+                fileInfo.style.background = '#d1e7dd';
+                fileInfo.style.borderColor = '#198754';
+                fileInfo.innerHTML = `
+                    <div class="d-flex align-items-center">
+                        <i class="fas fa-check-circle text-success me-2"></i>
+                        <span>${message}</span>
+                    </div>
+                `;
+            }
+
+            afficherErreur(message) {
+                const fileInfo = document.getElementById('fileInfo');
+                fileInfo.style.display = 'block';
+                fileInfo.style.background = '#f8d7da';
+                fileInfo.style.borderColor = '#dc3545';
+                fileInfo.innerHTML = `
+                    <div class="d-flex align-items-center">
+                        <i class="fas fa-exclamation-circle text-danger me-2"></i>
+                        <span>${message}</span>
+                    </div>
+                `;
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            window.gestionnaire = new GestionnaireTresorerie();
+        });
+
+        window.addEventListener('afterprint', () => {
+            document.getElementById('printZone').style.display = 'none';
+        });
+    </script>
+</body>
+</html>
